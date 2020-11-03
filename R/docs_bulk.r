@@ -19,13 +19,14 @@
 #' @param es_ids (boolean) Let Elasticsearch assign document IDs as UUIDs.
 #' These are sequential, so there is order to the IDs they assign.
 #' If `TRUE`, \code{doc_ids} is ignored. Default: `TRUE`
-#' @param raw (logical) Get raw JSON back or not. If `TRUE` 
+#' @param routing (character) Routing values. Default: `NULL`
+#' @param raw (logical) Get raw JSON back or not. If `TRUE`
 #' you get JSON; if `FALSE` you get a list. Default: `FALSE`
 #' @param quiet (logical) Suppress progress bar. Default: `FALSE`
 #' @param ... Pass on curl options to [httr::POST()]
 #'
-#' @seealso [docs_bulk_prep()] for prepping a newline delimited 
-#' JSON file that you can load into Elasticsearch yourself. See 
+#' @seealso [docs_bulk_prep()] for prepping a newline delimited
+#' JSON file that you can load into Elasticsearch yourself. See
 #' [docs_bulk_update()] for updating documents from an R data.frame
 #' or list.
 #'
@@ -55,12 +56,12 @@
 #' in data.frame or list, but not with files. If ids are not passed to
 #' `doc_ids`, we assign document IDs from 1 to length of the object
 #' (rows of a data.frame, or length of a list). In the future we may allow the
-#' user to select whether they want to assign sequential numeric IDs or 
-#' to allow Elasticsearch to assign IDs, which are UUIDs that are actually 
+#' user to select whether they want to assign sequential numeric IDs or
+#' to allow Elasticsearch to assign IDs, which are UUIDs that are actually
 #' sequential, so you still can determine an order of your documents.
-#' 
+#'
 #' @section Document IDs and Factors:
-#' If you pass in ids that are of class factor, we coerce them to character 
+#' If you pass in ids that are of class factor, we coerce them to character
 #' with `as.character`. This applies to both data.frame and list inputs, but
 #' not to file inputs.
 #'
@@ -83,18 +84,18 @@
 #' This function returns the response from Elasticsearch, but you'll likely
 #' not be that interested in the response. If not, wrap your call to
 #' `docs_bulk` in [invisible()], like so: `invisible(docs_bulk(...))`
-#' 
+#'
 #' @section Connections/Files:
-#' We create temporary files, and connections to those files, when data.frame's 
-#' and lists are passed in to `docs_bulk()` (not when a file is passed in 
-#' since we don't need to create a file). After inserting data into your 
+#' We create temporary files, and connections to those files, when data.frame's
+#' and lists are passed in to `docs_bulk()` (not when a file is passed in
+#' since we don't need to create a file). After inserting data into your
 #' Elasticsearch instance, we close the connections and delete the temporary files.
-#' 
-#' There are some exceptions though. When you pass in your own file, whether a 
-#' tempfile or not, we don't delete those files after using them - in case 
-#' you need those files again. Your own tempfile's will be cleaned up/delete 
+#'
+#' There are some exceptions though. When you pass in your own file, whether a
+#' tempfile or not, we don't delete those files after using them - in case
+#' you need those files again. Your own tempfile's will be cleaned up/delete
 #' when the R session ends. Non-tempfile's won't be cleaned up/deleted after
-#' the R session ends. 
+#' the R session ends.
 #'
 #' @return A list
 #'
@@ -188,22 +189,22 @@
 #' out <- docs_bulk(x = res, index = db)
 #' count(db)
 #' index_delete(db)
-#' 
-#' 
-#' 
+#'
+#'
+#'
 #' # Curl options
 #' library("httr")
 #' plosdat <- system.file("examples", "plos_data.json", package = "elastic")
 #' docs_bulk(plosdat, config=verbose())
-#' 
-#' 
+#'
+#'
 #' # suppress progress bar
 #' x <- docs_bulk(mtcars, index = "hello", type = "world", quiet = TRUE)
-#' ## vs. 
+#' ## vs.
 #' x <- docs_bulk(mtcars, index = "hello", type = "world", quiet = FALSE)
 #' }
 docs_bulk <- function(x, index = NULL, type = NULL, chunk_size = 1000,
-                      doc_ids = NULL, es_ids = TRUE, raw = FALSE, 
+                      doc_ids = NULL, routing = NULL, es_ids = TRUE, raw = FALSE,
                       quiet = FALSE, ...) {
 
   UseMethod("docs_bulk")
@@ -211,7 +212,7 @@ docs_bulk <- function(x, index = NULL, type = NULL, chunk_size = 1000,
 
 #' @export
 docs_bulk.default <- function(x, index = NULL, type = NULL, chunk_size = 1000,
-                      doc_ids = NULL, es_ids = TRUE, raw = FALSE, 
+                      doc_ids = NULL, routing = NULL, es_ids = TRUE, raw = FALSE,
                       quiet = FALSE, ...) {
 
   stop("no 'docs_bulk' method for class ", class(x), call. = FALSE)
@@ -219,7 +220,7 @@ docs_bulk.default <- function(x, index = NULL, type = NULL, chunk_size = 1000,
 
 #' @export
 docs_bulk.data.frame <- function(x, index = NULL, type = NULL, chunk_size = 1000,
-                                 doc_ids = NULL, 
+                                 doc_ids = NULL, routing = NULL,
                                  es_ids = TRUE, raw = FALSE, quiet = FALSE, ...) {
 
   assert(quiet, "logical")
@@ -242,7 +243,13 @@ docs_bulk.data.frame <- function(x, index = NULL, type = NULL, chunk_size = 1000
     rws <- shift_start(rws, index, type)
     id_chks <- split(rws, ceiling(seq_along(rws) / chunk_size))
   }
-  
+
+  if (!is.null(routing)) {
+    routing_chks <- split(routing, ceiling(seq_along(routing) / chunk_size))
+  } else {
+    routing_chks <- vector(mode = "list", length = length(data_chks))
+  }
+
   if (!quiet) {
     pb <- txtProgressBar(min = 0, max = length(data_chks), initial = 0, style = 3)
     on.exit(close(pb))
@@ -250,15 +257,15 @@ docs_bulk.data.frame <- function(x, index = NULL, type = NULL, chunk_size = 1000
   resl <- vector(mode = "list", length = length(data_chks))
   for (i in seq_along(data_chks)) {
     if (!quiet) setTxtProgressBar(pb, i)
-    resl[[i]] <- docs_bulk(make_bulk(x[data_chks[[i]], , drop = FALSE], 
-                                     index, type, id_chks[[i]], es_ids), ...)
+    resl[[i]] <- docs_bulk(make_bulk(x[data_chks[[i]], , drop = FALSE],
+                                     index, type, id_chks[[i]], es_ids, routing_chks[[i]]), ...)
   }
   return(resl)
 }
 
 #' @export
 docs_bulk.list <- function(x, index = NULL, type = NULL, chunk_size = 1000,
-                           doc_ids = NULL, es_ids = TRUE, raw = FALSE, 
+                           doc_ids = NULL, routing = NULL, es_ids = TRUE, raw = FALSE,
                            quiet = FALSE, ...) {
 
   assert(quiet, "logical")
@@ -284,6 +291,12 @@ docs_bulk.list <- function(x, index = NULL, type = NULL, chunk_size = 1000,
     id_chks <- split(rws, ceiling(seq_along(rws) / chunk_size))
   }
 
+  if (!is.null(routing)) {
+    routing_chks <- split(routing, ceiling(seq_along(routing) / chunk_size))
+  } else {
+    routing_chks <- vector(mode = "list", length = length(data_chks))
+  }
+
   if (!quiet) {
     pb <- txtProgressBar(min = 0, max = length(data_chks), initial = 0, style = 3)
     on.exit(close(pb))
@@ -291,23 +304,23 @@ docs_bulk.list <- function(x, index = NULL, type = NULL, chunk_size = 1000,
   resl <- vector(mode = "list", length = length(data_chks))
   for (i in seq_along(data_chks)) {
     if (!quiet) setTxtProgressBar(pb, i)
-    resl[[i]] <- docs_bulk(make_bulk(x[data_chks[[i]]], index, 
-                                     type, id_chks[[i]], es_ids), ...)
+    resl[[i]] <- docs_bulk(make_bulk(x[data_chks[[i]]], index,
+                                     type, id_chks[[i]], es_ids, routing_chks[[i]]), ...)
   }
   return(resl)
 }
 
 #' @export
 docs_bulk.character <- function(x, index = NULL, type = NULL, chunk_size = 1000,
-                                doc_ids = NULL, es_ids = TRUE, raw=FALSE, 
+                                doc_ids = NULL, routing = NULL, es_ids = TRUE, raw=FALSE,
                                 quiet = FALSE, ...) {
 
   stopifnot(file.exists(x))
   on.exit(close_conns())
   on.exit(cleanup_file(x), add = TRUE)
   url <- paste0(make_url(es_get_auth()), '/_bulk')
-  tt <- POST(url, make_up(), es_env$headers, ..., 
-             body = upload_file(x, type = "application/x-ndjson"), 
+  tt <- POST(url, make_up(), es_env$headers, ...,
+             body = upload_file(x, type = "application/x-ndjson"),
              encode = "json")
   geterror(tt)
   res <- cont_utf8(tt)

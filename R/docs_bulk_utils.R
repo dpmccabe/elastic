@@ -1,4 +1,4 @@
-make_bulk <- function(df, index, type, counter, es_ids, path = NULL) {
+make_bulk <- function(df, index, type, counter, es_ids, routing, path = NULL) {
   if (!is.character(counter)) {
     if (max(counter) >= 10000000000) {
       scipen <- getOption("scipen")
@@ -6,21 +6,46 @@ make_bulk <- function(df, index, type, counter, es_ids, path = NULL) {
       on.exit(options(scipen = scipen))
     }
   }
+
   metadata_fmt <- if (es_ids) {
-    '{"index":{"_index":"%s","_type":"%s"}}'
+    if (is.null(routing)) {
+      '{"index":{"_index":"%s","_type":"%s"}}'
+    } else {
+      '{"index":{"_index":"%s","_type":"%s","routing":"%s"}}'
+    }
   } else {
     if (is.character(counter)) {
-      '{"index":{"_index":"%s","_type":"%s","_id":"%s"}}'
+      if (is.null(routing)) {
+        '{"index":{"_index":"%s","_type":"%s","_id":"%s"}}'
+      } else {
+        '{"index":{"_index":"%s","_type":"%s","_id":"%s","routing":"%s"}}'
+      }
     } else {
-      '{"index":{"_index":"%s","_type":"%s","_id":%s}}'
+      if (is.null(routing)) {
+        '{"index":{"_index":"%s","_type":"%s","_id":%s}}'
+      } else {
+        '{"index":{"_index":"%s","_type":"%s","_id":%s,"routing":"%s"}}'
+      }
     }
   }
-  metadata <- sprintf(
-    metadata_fmt,
-    index,
-    type,
-    counter
-  )
+
+  if (is.null(routing)) {
+    metadata <- sprintf(
+      metadata_fmt,
+      index,
+      type,
+      counter
+    )
+  } else {
+    metadata <- sprintf(
+      metadata_fmt,
+      index,
+      type,
+      counter,
+      routing
+    )
+  }
+
   data <- jsonlite::toJSON(df, collapse = FALSE, na = "null", auto_unbox = TRUE, null = "null")
   tmpf <- if (is.null(path)) tempfile("elastic__") else path
   write_utf8(paste(metadata, data, sep = "\n"), tmpf)
@@ -40,10 +65,10 @@ check_doc_ids <- function(x, ids) {
   if (!is.null(ids)) {
     # check class type
     if (!class(ids) %in% c('character', 'factor', 'numeric', 'integer')) {
-      stop("doc_ids must be of class character, numeric or integer", 
+      stop("doc_ids must be of class character, numeric or integer",
            call. = FALSE)
     }
-    
+
     # check appropriate length
     if (!all(1:NROW(x) == 1:length(ids))) {
       stop("doc_ids length must equal number of documents", call. = FALSE)
@@ -69,7 +94,7 @@ has_ids <- function(x) {
 
 close_conns <- function() {
   cons <- showConnections()
-  ours <- as.integer(rownames(cons)[grepl("/elastic__", cons[, "description"], 
+  ours <- as.integer(rownames(cons)[grepl("/elastic__", cons[, "description"],
                                           fixed = TRUE)])
   for (i in ours) {
     close(getConnection(i))
